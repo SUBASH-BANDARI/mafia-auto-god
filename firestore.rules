@@ -20,6 +20,8 @@ service cloud.firestore {
         request.auth.uid == uid || 
         get(/databases/$(database)/documents/rooms/$(roomId)).data.createdBy == request.auth.uid
       );
+      // Allow deleting your own player document (for exiting room)
+      allow delete: if isAuthed() && request.auth.uid == uid;
     }
   }
 }

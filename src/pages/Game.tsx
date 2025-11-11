@@ -129,6 +129,30 @@ export default function Game({ roomId }: { roomId:string }) {
             })
             console.log('Game: Players loaded:', Object.keys(map).length, 'players')
             setPlayers(map)
+            
+            // Always update 'my' state from the latest players data to ensure synchronization
+            if (userId && map[userId]) {
+              const myPlayerData = map[userId]
+              setMy(prevMy => {
+                // Only update if data actually changed to avoid unnecessary re-renders
+                if (!prevMy || 
+                    prevMy.isAlive !== myPlayerData.isAlive ||
+                    prevMy.role !== myPlayerData.role ||
+                    prevMy.nightVote !== myPlayerData.nightVote ||
+                    prevMy.healTarget !== myPlayerData.healTarget ||
+                    prevMy.dayVote !== myPlayerData.dayVote ||
+                    prevMy.policeGuess !== myPlayerData.policeGuess ||
+                    prevMy.displayName !== myPlayerData.displayName) {
+                  console.log('Game: Updating my state from Firestore:', {
+                    isAlive: myPlayerData.isAlive,
+                    role: myPlayerData.role,
+                    displayName: myPlayerData.displayName
+                  })
+                  return myPlayerData
+                }
+                return prevMy
+              })
+            }
           } catch (err) {
             console.error('Error processing players data:', err)
           }
@@ -445,11 +469,15 @@ export default function Game({ roomId }: { roomId:string }) {
     if (killed && healedTargets.includes(killed)) {
       wasHealed = true
       healedPlayerName = freshPlayers[killed]?.displayName || 'someone'
+      // Explicitly ensure healed player is alive (defensive fix)
+      await setDoc(doc(db, 'rooms', roomId, 'players', killed), { isAlive: true }, { merge: true })
+      console.log('Healer saved player:', healedPlayerName, '- ensuring isAlive: true')
       killed = undefined // Healer saved them, no one dies
     }
     
     if (killed) {
       await setDoc(doc(db, 'rooms', roomId, 'players', killed), { isAlive: false }, { merge: true })
+      console.log('Player killed:', freshPlayers[killed]?.displayName)
       // Wait a moment for Firestore to sync
       await new Promise(resolve => setTimeout(resolve, 200))
     }
@@ -517,8 +545,19 @@ export default function Game({ roomId }: { roomId:string }) {
     const currentRoom = roomSnap.data() as Room
     if (currentRoom.phase !== 'day') return // Phase already changed
     
-    const alivePlayers = Object.entries(players).filter(([id, p]) => p.isAlive)
+    // Get fresh player data from Firestore to ensure accurate alive status
+    const playersSnap = await getDocs(collection(db, 'rooms', roomId, 'players'))
+    const freshPlayers: Record<string, PlayerDoc> = {}
+    playersSnap.forEach(doc => {
+      if (doc.exists()) {
+        freshPlayers[doc.id] = doc.data() as PlayerDoc
+      }
+    })
+    
+    const alivePlayers = Object.entries(freshPlayers).filter(([id, p]) => p.isAlive === true)
     const votedPlayers = alivePlayers.filter(([id, p]) => p.dayVote !== null && p.dayVote !== undefined)
+    
+    console.log('Day phase check - Alive players:', alivePlayers.length, 'Voted:', votedPlayers.length)
     
     if (alivePlayers.length > 0 && votedPlayers.length === alivePlayers.length) {
       // All alive players have voted, resolve day phase
@@ -582,13 +621,15 @@ export default function Game({ roomId }: { roomId:string }) {
     const votes: Record<string,string|null> = {}
     const alive: Record<string,boolean> = {}
     for (const [uid, p] of Object.entries(freshPlayers)) {
-      alive[uid] = p.isAlive
+      // Use the latest isAlive status from Firestore
+      alive[uid] = p.isAlive ?? true // Default to true if undefined (defensive)
       votes[uid] = p.dayVote ?? null
     }
     const top = tally(votes, alive)
     const killed = top?.target
     if (killed) {
       await setDoc(doc(db, 'rooms', roomId, 'players', killed), { isAlive: false }, { merge: true })
+      console.log('Day vote: Player eliminated:', freshPlayers[killed]?.displayName)
       // Wait a moment for Firestore to sync
       await new Promise(resolve => setTimeout(resolve, 200))
     }
@@ -617,6 +658,15 @@ export default function Game({ roomId }: { roomId:string }) {
       })
     } else {
       // Continue to next round - night phase
+      // Ensure all alive players maintain their isAlive status (defensive fix for round transitions)
+      console.log('Transitioning to next round. Ensuring player states are correct.')
+      for (const [uid, p] of Object.entries(finalPlayers)) {
+        // Only update if player is alive - don't change dead players
+        if (p.isAlive) {
+          // Explicitly maintain isAlive: true for alive players across rounds
+          await setDoc(doc(db, 'rooms', roomId, 'players', uid), { isAlive: true }, { merge: true })
+        }
+      }
       await updateDoc(doc(db, 'rooms', roomId), { phase: 'night_mafia', round: (room.round || 1) + 1 })
     }
   }
@@ -1512,8 +1562,21 @@ export default function Game({ roomId }: { roomId:string }) {
                 ) : null}
               </Card>
             )}
-            {my.isAlive ? (
-              <>
+            {(() => {
+              // Always check the latest state from Firestore, not stale local state
+              const currentPlayer = players[myId || '']
+              const isPlayerAlive = currentPlayer?.isAlive ?? my?.isAlive ?? false
+              
+              if (!isPlayerAlive) {
+                return (
+                  <Typography variant="body2" color="text.secondary">
+                    You are dead. You can observe the discussion but cannot vote.
+                  </Typography>
+                )
+              }
+              
+              return (
+                <>
                 {my.role === 'police' && (
                   <Card sx={{ 
                     bgcolor: 'rgba(59, 130, 246, 0.1)',
@@ -1641,7 +1704,8 @@ export default function Game({ roomId }: { roomId:string }) {
                 
                 {/* Voting Status Display */}
                 {(() => {
-                  const alivePlayers = Object.entries(players).filter(([id, p]) => p.isAlive)
+                  // Use fresh data from players state, ensuring isAlive is properly checked
+                  const alivePlayers = Object.entries(players).filter(([id, p]) => p.isAlive === true)
                   const votedPlayers = alivePlayers.filter(([id, p]) => p.dayVote !== null && p.dayVote !== undefined)
                   const notVotedPlayers = alivePlayers.filter(([id, p]) => p.dayVote === null || p.dayVote === undefined)
                   
@@ -1672,12 +1736,9 @@ export default function Game({ roomId }: { roomId:string }) {
                     </Card>
                   )
                 })()}
-              </>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                You are dead. You can observe the discussion but cannot vote.
-              </Typography>
-            )}
+                </>
+              )
+            })()}
           </Stack>
         )}
 

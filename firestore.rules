@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthed() { return request.auth != null; }
+
+    match /rooms/{roomId} {
+      allow read: if isAuthed();
+      allow create: if isAuthed();
+      allow update: if isAuthed();
+      allow delete: if false;
+    }
+
+    match /rooms/{roomId}/players/{uid} {
+      // Allow anyone in the room to read all players (needed for lobby)
+      allow read: if isAuthed();
+      // Allow creating your own player document
+      allow create: if isAuthed() && request.auth.uid == uid;
+      // Allow updating your own player document OR if you're the host of the room
+      allow update: if isAuthed() && (
+        request.auth.uid == uid || 
+        get(/databases/$(database)/documents/rooms/$(roomId)).data.createdBy == request.auth.uid
+      );
+    }
+  }
+}

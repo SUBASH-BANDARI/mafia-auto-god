@@ -5,6 +5,7 @@ import { auth, db, ensureAnon } from '../lib/firebase'
 import { nanoid } from 'nanoid/non-secure'
 import { PlayerDoc } from '../types'
 import { saveRoomData } from '../lib/storage'
+import { showNotification } from '../App'
 
 function genCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -58,9 +59,11 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       const roomCode = roomData.exists() ? roomData.data().code : undefined
       saveRoomData(roomRef.id, name.trim(), roomCode)
       
+      showNotification('Room created successfully!', 'success')
       toLobby(roomRef.id)
     } catch (err: any) {
       setError('Failed to create room: ' + (err.message || 'Unknown error'))
+      showNotification('Failed to create room: ' + (err.message || 'Unknown error'), 'error')
       setLoading(false)
     }
   }
@@ -82,6 +85,7 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       const snap = await getDocs(qy)
       if (snap.empty) { 
         setError('Room not found. Please check the room code.')
+        showNotification('Room not found. Please check the room code.', 'error')
         setLoading(false)
         return 
       }
@@ -89,6 +93,7 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       const roomData = room.data()
       if (roomData.status === 'ended') {
         setError('This game has already ended.')
+        showNotification('This game has already ended.', 'error')
         setLoading(false)
         return
       }
@@ -104,6 +109,7 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       // If game is in progress, only allow rejoining (existing players)
       if (roomData.status === 'in_progress' && !isRejoining) {
         setError('This game is already in progress. You cannot join as a new player.')
+        showNotification('This game is already in progress. You cannot join as a new player.', 'error')
         setLoading(false)
         return
       }
@@ -161,9 +167,11 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       // Save room data to localStorage for persistence
       saveRoomData(room.id, name.trim(), roomData.code)
       
+      showNotification('Successfully joined room!', 'success')
       toLobby(room.id)
     } catch (err: any) {
       setError('Failed to join room: ' + (err.message || 'Unknown error'))
+      showNotification('Failed to join room: ' + (err.message || 'Unknown error'), 'error')
       setLoading(false)
     }
   }
@@ -180,36 +188,8 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
       />
 
       {error && (
-        <Alert severity="error">{error}</Alert>
+        <Alert severity="error" sx={{ fontSize: '0.85rem', py: 1 }}>{error}</Alert>
       )}
-
-      <Card>
-        <CardContent>
-          <Stack spacing={2}>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>Create New Room</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Start a new game. You'll be the host and can start the game when 4+ players join.
-            </Typography>
-            <Button 
-              variant="contained" 
-              onClick={createRoom}
-              disabled={loading}
-              fullWidth
-              size="large"
-            >
-              {loading ? 'Creating...' : 'Create Room'}
-            </Button>
-          </Stack>
-        </CardContent>
-      </Card>
-
-      <Box sx={{ display: 'flex', alignItems: 'center', my: 1 }}>
-        <Divider sx={{ flex: 1 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
-          OR
-        </Typography>
-        <Divider sx={{ flex: 1 }} />
-      </Box>
 
       <Card>
         <CardContent>
@@ -227,13 +207,41 @@ export default function Home({ toLobby, toGame }: { toLobby: (roomId:string)=>vo
               inputProps={{ maxLength: 6, style: { textTransform: 'uppercase', fontFamily: 'monospace', fontSize: '1.2em', letterSpacing: '0.1em' } }}
             />
             <Button 
-              variant="outlined" 
+              variant="contained" 
               onClick={joinRoom}
               disabled={loading}
               fullWidth
               size="large"
             >
               {loading ? 'Joining...' : 'Join Room'}
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', my: 1 }}>
+        <Divider sx={{ flex: 1 }} />
+        <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
+          OR
+        </Typography>
+        <Divider sx={{ flex: 1 }} />
+      </Box>
+
+      <Card>
+        <CardContent>
+          <Stack spacing={2}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>Create New Room</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Start a new game. You'll be the host and can start the game when 4+ players join.
+            </Typography>
+            <Button 
+              variant="outlined" 
+              onClick={createRoom}
+              disabled={loading}
+              fullWidth
+              size="large"
+            >
+              {loading ? 'Creating...' : 'Create Room'}
             </Button>
           </Stack>
         </CardContent>

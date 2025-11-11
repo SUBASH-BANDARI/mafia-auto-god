@@ -10,6 +10,7 @@ import { auth, db } from './lib/firebase'
 import { ErrorBoundary } from './ErrorBoundary'
 import { getSavedRoomData, clearRoomData } from './lib/storage'
 import { doc, getDoc } from 'firebase/firestore'
+import { useNotification } from './hooks/useNotification'
 
 const theme = createTheme({
   palette: {
@@ -181,9 +182,30 @@ const theme = createTheme({
 
 type Page = { name: 'home' } | { name: 'lobby', roomId: string } | { name: 'game', roomId: string }
 
+// Create a notification context
+let globalShowNotification: ((message: string, type?: 'success' | 'error' | 'info' | 'warning') => void) | null = null
+
+export function setGlobalNotification(showNotification: (message: string, type?: 'success' | 'error' | 'info' | 'warning') => void) {
+  globalShowNotification = showNotification
+}
+
+export function showNotification(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') {
+  if (globalShowNotification) {
+    globalShowNotification(message, type)
+  } else {
+    // Fallback to alert if notification system not ready
+    alert(message)
+  }
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>({ name: 'home' })
   const [ready, setReady] = useState(false)
+  const { showNotification: showNotif, NotificationContainer } = useNotification()
+
+  useEffect(() => {
+    setGlobalNotification(showNotif)
+  }, [showNotif])
 
   useEffect(() => {
     // Wait for auth state to be restored from persistence, then ensure anonymous auth
@@ -284,12 +306,14 @@ export default function App() {
                 />
                 : page.name === 'lobby' ? <Lobby 
                   roomId={page.roomId} 
-                  toGame={(id)=>{console.log('Navigating to game with roomId:', id); setPage({name:'game', roomId:id})}} 
+                  toGame={(id)=>{console.log('Navigating to game with roomId:', id); setPage({name:'game', roomId:id})}}
+                  toHome={()=>setPage({name:'home'})}
                 />
                 : (() => {console.log('Rendering Game component with roomId:', page.roomId); return <Game roomId={page.roomId} />})()
               )}
             </Box>
           </Container>
+          <NotificationContainer />
         </Box>
       </ErrorBoundary>
     </ThemeProvider>

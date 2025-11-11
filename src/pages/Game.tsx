@@ -7,6 +7,8 @@ import { tally, winCheck } from '../lib/gameLogic'
 import { clearRoomData } from '../lib/storage'
 import RoleAvatar from '../components/RoleAvatar'
 import { getRoleInfo } from '../lib/roleUtils'
+import { showNotification } from '../App'
+import { nanoid } from 'nanoid/non-secure'
 
 export default function Game({ roomId }: { roomId:string }) {
   const [room, setRoom] = useState<Room|null>(null)
@@ -16,6 +18,7 @@ export default function Game({ roomId }: { roomId:string }) {
   const [isSubmittingPoliceGuess, setIsSubmittingPoliceGuess] = useState(false)
   const [showPoliceGuessResult, setShowPoliceGuessResult] = useState(false)
   const [hasShownPoliceGuessResult, setHasShownPoliceGuessResult] = useState(false)
+  const [policeGuessCountdown, setPoliceGuessCountdown] = useState(0)
   const [showRoleFlashScreen, setShowRoleFlashScreen] = useState(false)
   const [hasShownRoleFlash, setHasShownRoleFlash] = useState(false)
   
@@ -220,11 +223,11 @@ export default function Game({ roomId }: { roomId:string }) {
   async function submitMafia() {
     if (!my || !myId || !room || room.phase !== 'night_mafia' || my.role !== 'mafia') return
     if (!my.nightVote) {
-      alert('Please select a target to kill.')
+      showNotification('Please select a target to kill.', 'warning')
       return
     }
     await setDoc(doc(db, 'rooms', roomId, 'players', myId), { nightVote: my.nightVote }, { merge: true })
-    alert('Mafia target submitted!')
+    showNotification('Mafia target submitted!', 'success')
     // Auto-advance if all mafia have submitted
     checkAndAdvanceMafiaPhase()
   }
@@ -233,13 +236,13 @@ export default function Game({ roomId }: { roomId:string }) {
     if (!my || !myId || !room || room.phase !== 'night_police' || my.role !== 'police') return
     // Check if police has already guessed (only one guess per game)
     if (my.policeGuess && players[myId]?.policeGuess) {
-      alert('You have already made your guess. You can only guess once per game.')
+      showNotification('You have already made your guess. You can only guess once per game.', 'warning')
       // Still advance phase if police already guessed
       await updateDoc(doc(db, 'rooms', roomId), { phase: 'night_healer' })
       return
     }
     if (!my.policeGuess) {
-      alert('Please select a player to guess.')
+      showNotification('Please select a player to guess.', 'warning')
       return
     }
     
@@ -253,15 +256,29 @@ export default function Game({ roomId }: { roomId:string }) {
       // Wait a moment for Firestore to sync
       await new Promise(resolve => setTimeout(resolve, 300))
       
-      // Show the result for 3 seconds (memory game - police needs to remember)
+      // Show the result for 5 seconds with countdown (memory game - police needs to remember)
       setShowPoliceGuessResult(true)
       setHasShownPoliceGuessResult(true)
+      setPoliceGuessCountdown(5)
       
-      // After showing feedback for 3 seconds, hide it and advance to next phase
+      // Countdown timer
+      const countdownInterval = setInterval(() => {
+        setPoliceGuessCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(countdownInterval)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      
+      // After showing feedback for 5 seconds, hide it and advance to next phase
       setTimeout(async () => {
         try {
+          clearInterval(countdownInterval)
           // Hide the result (memory game - police must remember)
           setShowPoliceGuessResult(false)
+          setPoliceGuessCountdown(0)
           
           // Double-check phase hasn't changed
           const roomSnap = await getDoc(doc(db, 'rooms', roomId))
@@ -272,10 +289,10 @@ export default function Game({ roomId }: { roomId:string }) {
         } catch (error) {
           console.error('Error auto-advancing phase:', error)
         }
-      }, 3000) // 3 second delay to show feedback
+      }, 5000) // 5 second delay to show feedback
     } catch (error) {
       console.error('Error submitting police guess:', error)
-      alert('Failed to submit guess. Please try again.')
+      showNotification('Failed to submit guess. Please try again.', 'error')
       setIsSubmittingPoliceGuess(false)
     }
   }
@@ -283,11 +300,11 @@ export default function Game({ roomId }: { roomId:string }) {
   async function submitHealer() {
     if (!my || !myId || !room || room.phase !== 'night_healer' || my.role !== 'healer') return
     if (!my.healTarget) {
-      alert('Please select someone to heal.')
+      showNotification('Please select someone to heal.', 'warning')
       return
     }
     await setDoc(doc(db, 'rooms', roomId, 'players', myId), { healTarget: my.healTarget }, { merge: true })
-    alert('Heal target submitted!')
+    showNotification('Heal target submitted!', 'success')
     // Auto-advance if healer has submitted
     checkAndAdvanceHealerPhase()
   }
@@ -486,7 +503,7 @@ export default function Game({ roomId }: { roomId:string }) {
   async function submitDay() {
     if (!my || !myId || !room || room.phase !== 'day') return
     await setDoc(doc(db, 'rooms', roomId, 'players', myId), { dayVote: my.dayVote ?? null }, { merge: true })
-    alert('Day vote submitted.')
+    showNotification('Day vote submitted.', 'success')
     // Trigger auto-advance check after submission
     setTimeout(() => checkAndAdvanceDayPhase(), 300)
   }
@@ -1292,6 +1309,19 @@ export default function Game({ roomId }: { roomId:string }) {
                                       ? '✅ Correct! You guessed right - that player is Mafia!' 
                                       : '❌ Wrong guess. That player is not Mafia.'}
                                   </Typography>
+                                  {policeGuessCountdown > 0 && (
+                                    <Typography 
+                                      variant="h4" 
+                                      sx={{ 
+                                        mt: 2,
+                                        color: isCorrect ? 'success.light' : 'error.light',
+                                        fontWeight: 'bold',
+                                        fontSize: '3rem',
+                                      }}
+                                    >
+                                      {policeGuessCountdown}
+                                    </Typography>
+                                  )}
                                   <Typography 
                                     variant="body2" 
                                     sx={{ 
@@ -1658,18 +1688,142 @@ export default function Game({ roomId }: { roomId:string }) {
         )}
 
         {room.phase === 'ended' && (
-          <Stack spacing={2}>
-            <Typography variant="h6">🏁 Game Ended</Typography>
-            <Typography variant="body2">
-              The game has concluded. Check with the host for final results.
-            </Typography>
-            <Divider />
-            <Typography variant="subtitle2">Final Player Status:</Typography>
-            {allPlayerEntries.map(([id, p]) => (
-              <Typography key={id} variant="body2">
-                {p.displayName}: {p.role} {p.isAlive ? '✅' : '❌'}
+          <Stack spacing={3}>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>
+                🏁 Game Ended
               </Typography>
-            ))}
+              {room.winner && (
+                <Typography variant="h6" sx={{ 
+                  color: room.winner === 'mafia' ? 'error.light' : 'success.light',
+                  fontWeight: 600,
+                  mb: 2,
+                }}>
+                  {room.winner === 'mafia' ? '🔪 Mafia Wins!' : '🏆 Villagers Win!'}
+                </Typography>
+              )}
+            </Box>
+            <Divider />
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Final Player Status:</Typography>
+            <Stack spacing={1}>
+              {allPlayerEntries.map(([id, p]) => {
+                const showRole = shouldShowRole(id, p, myId, my?.role, room.phase)
+                return (
+                  <Box 
+                    key={id} 
+                    sx={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: 1.5,
+                      p: 1.5,
+                      bgcolor: 'rgba(255, 255, 255, 0.03)',
+                      borderRadius: 1,
+                    }}
+                  >
+                    <RoleAvatar role={showRole ? p.role : null} size={32} isAlive={p.isAlive} />
+                    <Typography variant="body2" sx={{ flex: 1 }}>
+                      {p.displayName}
+                    </Typography>
+                    {showRole && p.role && (
+                      <Chip 
+                        label={getRoleInfo(p.role).name} 
+                        size="small"
+                        sx={{ 
+                          bgcolor: `${getRoleInfo(p.role).color}20`,
+                          color: getRoleInfo(p.role).lightColor,
+                          border: `1px solid ${getRoleInfo(p.role).color}40`,
+                        }}
+                      />
+                    )}
+                    <Chip 
+                      label={p.isAlive ? 'Alive' : 'Dead'} 
+                      size="small"
+                      sx={{ 
+                        bgcolor: p.isAlive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                        color: p.isAlive ? '#34d399' : '#f87171',
+                      }}
+                    />
+                  </Box>
+                )
+              })}
+            </Stack>
+            <Divider />
+            {room?.createdBy === auth.currentUser?.uid && (
+              <Button
+                variant="contained"
+                size="large"
+                fullWidth
+                onClick={async () => {
+                  try {
+                    // Generate new room code
+                    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+                    let newCode = ''
+                    for (let i = 0; i < 6; i++) {
+                      newCode += chars[Math.floor(Math.random() * chars.length)]
+                    }
+                    
+                    // Reset all player data
+                    const playersSnap = await getDocs(collection(db, 'rooms', roomId, 'players'))
+                    for (const playerDoc of playersSnap.docs) {
+                      await setDoc(playerDoc.ref, {
+                        role: null,
+                        isAlive: true,
+                        nightVote: null,
+                        healTarget: null,
+                        dayVote: null,
+                        policeGuess: null,
+                      }, { merge: true })
+                    }
+                    
+                    // Reset room state
+                    await updateDoc(doc(db, 'rooms', roomId), {
+                      code: newCode,
+                      phase: 'lobby',
+                      status: 'open',
+                      round: 0,
+                      winner: null,
+                      lastNightResult: null,
+                    })
+                    
+                    showNotification(`New game ready! Room code: ${newCode}`, 'success')
+                  } catch (error: any) {
+                    console.error('Error resetting game:', error)
+                    showNotification('Failed to start new game: ' + (error.message || 'Unknown error'), 'error')
+                  }
+                }}
+                sx={{
+                  background: 'linear-gradient(135deg, #6366f1 0%, #ec4899 100%)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  py: 2,
+                  fontSize: '1.1rem',
+                  animation: 'flicker 1.5s ease-in-out infinite',
+                  '@keyframes flicker': {
+                    '0%, 100%': { opacity: 1, transform: 'scale(1)' },
+                    '50%': { opacity: 0.8, transform: 'scale(1.02)' },
+                  },
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #4f46e5 0%, #db2777 100%)',
+                    animation: 'none',
+                  },
+                }}
+              >
+                🎮 Play Again
+              </Button>
+            )}
+            {room?.createdBy !== auth.currentUser?.uid && (
+              <Box sx={{ textAlign: 'center', py: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ 
+                  animation: 'flicker 1.5s ease-in-out infinite',
+                  '@keyframes flicker': {
+                    '0%, 100%': { opacity: 1 },
+                    '50%': { opacity: 0.6 },
+                  },
+                }}>
+                  ⏳ Waiting for host to start a new game...
+                </Typography>
+              </Box>
+            )}
           </Stack>
         )}
         </Stack>

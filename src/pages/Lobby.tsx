@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, CardContent, Divider, Stack, Typography, IconButton, Tooltip, Box, Chip, Alert } from '@mui/material'
+import { Button, Card, CardContent, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Stack, Typography, IconButton, Tooltip, Box, Chip, Alert } from '@mui/material'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import PersonIcon from '@mui/icons-material/Person'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import ExitToAppIcon from '@mui/icons-material/ExitToApp'
 import { auth, db } from '../lib/firebase'
 import { assignRoles } from '../lib/roles'
-import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, setDoc, updateDoc } from 'firebase/firestore'
 import { Phase, PlayerDoc, Room } from '../types'
-import { saveRoomData } from '../lib/storage'
+import { clearRoomData, saveRoomData } from '../lib/storage'
 import RoleAvatar from '../components/RoleAvatar'
+import { showNotification } from '../App'
 
-export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:string)=>void }) {
+export default function Lobby({ roomId, toGame, toHome }: { roomId:string, toGame:(id:string)=>void, toHome:()=>void }) {
   const [room, setRoom] = useState<Room|null>(null)
   const [players, setPlayers] = useState<Record<string, PlayerDoc>>({})
+  const [exitDialogOpen, setExitDialogOpen] = useState(false)
 
   useEffect(() => {
     const unsubRoom = onSnapshot(
@@ -53,7 +56,7 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
       },
       (error) => {
         console.error('Error listening to players:', error)
-        alert('Error loading players. Please check Firestore rules allow reading all players in a room.')
+        showNotification('Error loading players. Please check Firestore rules allow reading all players in a room.', 'error')
       }
     )
     return () => { unsubRoom(); unsubPlayers(); }
@@ -79,7 +82,7 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
     }
     const uids = Object.entries(players).map(([uid, p]) => uid)
     if (uids.length < 4) { 
-      alert('Need at least 4 players'); 
+      showNotification('Need at least 4 players to start', 'warning')
       return 
     }
     
@@ -111,7 +114,7 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
       toGame(roomId)
     } catch (error: any) {
       console.error('Error starting game:', error)
-      alert('Failed to start game: ' + (error.message || 'Unknown error. Check console for details.'))
+      showNotification('Failed to start game: ' + (error.message || 'Unknown error'), 'error')
     }
   }
 
@@ -121,7 +124,37 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
   async function copyRoomCode() {
     if (room?.code) {
       await navigator.clipboard.writeText(room.code)
-      alert('Room code copied to clipboard!')
+      showNotification('Room code copied to clipboard!', 'success')
+    }
+  }
+
+  async function exitRoom() {
+    const userId = auth.currentUser?.uid
+    if (!userId) return
+
+    try {
+      // Remove player from Firestore
+      const playerDoc = doc(db, 'rooms', roomId, 'players', userId)
+      await deleteDoc(playerDoc)
+      
+      // Clear localStorage
+      clearRoomData()
+      
+      showNotification('You have left the room', 'info')
+      toHome()
+    } catch (error: any) {
+      console.error('Error exiting room:', error)
+      showNotification('Failed to exit room: ' + (error.message || 'Unknown error'), 'error')
+    }
+  }
+
+  function handleExitClick() {
+    if (isHost) {
+      // Host needs confirmation
+      setExitDialogOpen(true)
+    } else {
+      // Regular player can exit directly
+      exitRoom()
     }
   }
 
@@ -141,35 +174,92 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
       setPlayers(map)
     } catch (error) {
       console.error('Error refreshing players:', error)
-      alert('Error refreshing players. Check console for details.')
+      showNotification('Error refreshing players', 'error')
     }
   }
 
   return (
-    <Card>
-      <CardContent>
-        <Stack spacing={2}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>Game Lobby</Typography>
-          
-          {/* Room Code Section */}
-          <Box>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography variant="body2" color="text.secondary">
-                Room Code:
+    <>
+      {/* Exit Room Confirmation Dialog */}
+      <Dialog
+        open={exitDialogOpen}
+        onClose={() => setExitDialogOpen(false)}
+        PaperProps={{
+          sx: {
+            bgcolor: '#1a1a1a',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+          },
+        }}
+      >
+        <DialogTitle sx={{ color: 'text.primary', fontWeight: 600 }}>
+          Exit Room?
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ color: 'text.secondary' }}>
+            {isHost 
+              ? "You are the host. If you exit, you'll need to create a new room. Are you sure you want to exit?"
+              : "Are you sure you want to leave this room?"}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExitDialogOpen(false)} sx={{ color: 'text.secondary' }}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={() => {
+              setExitDialogOpen(false)
+              exitRoom()
+            }} 
+            variant="contained"
+            sx={{ bgcolor: 'error.main', '&:hover': { bgcolor: 'error.dark' } }}
+          >
+            Exit
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Card>
+        <CardContent>
+          <Stack spacing={2}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>Game Lobby</Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<ExitToAppIcon />}
+                onClick={handleExitClick}
+                sx={{
+                  borderColor: 'error.main',
+                  color: 'error.light',
+                  '&:hover': {
+                    borderColor: 'error.dark',
+                    bgcolor: 'rgba(239, 68, 68, 0.1)',
+                  },
+                }}
+              >
+                Exit Room
+              </Button>
+            </Box>
+            
+            {/* Room Code Section */}
+            <Box>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="body2" color="text.secondary">
+                  Room Code:
+                </Typography>
+                <Typography variant="h6" component="span" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
+                  {room?.code || '...'}
+                </Typography>
+                <Tooltip title="Copy room code">
+                  <IconButton size="small" onClick={copyRoomCode}>
+                    <ContentCopyIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                Share this code with other players to join
               </Typography>
-              <Typography variant="h6" component="span" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
-                {room?.code || '...'}
-              </Typography>
-              <Tooltip title="Copy room code">
-                <IconButton size="small" onClick={copyRoomCode}>
-                  <ContentCopyIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-              Share this code with other players to join
-            </Typography>
-          </Box>
+            </Box>
 
           <Divider />
 
@@ -177,8 +267,13 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
           <Alert 
             severity={canStart ? 'success' : 'warning'} 
             icon={<PersonIcon />}
+            sx={{ 
+              fontSize: '0.85rem',
+              py: 1,
+              '& .MuiAlert-message': { fontSize: '0.85rem' },
+            }}
           >
-            <Typography variant="body2">
+            <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
               <strong>{playerCount} player{playerCount !== 1 ? 's' : ''} joined</strong>
               {canStart ? (
                 ' ✓ Ready to start!'
@@ -298,5 +393,6 @@ export default function Lobby({ roomId, toGame }: { roomId:string, toGame:(id:st
         </Stack>
       </CardContent>
     </Card>
+    </>
   )
 }
